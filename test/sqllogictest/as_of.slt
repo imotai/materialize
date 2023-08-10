@@ -94,3 +94,113 @@ SELECT * FROM data AS OF NULL::numeric;
 
 query error can't use null as a mz_timestamp for AS OF
 SUBSCRIBE (SELECT 1) AS OF NULL::timestamptz;
+
+# Test that timestamps are used for constant queries
+
+statement ok
+create view events_over_time as values ('joe', 100), ('mike', 101), ('sam', 200);
+
+statement ok
+create view events as select * from events_over_time where mz_now() >= column2;
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE events AS OF 0
+
+query IITI
+FETCH ALL c
+----
+100  1  joe   100
+101  1  mike  101
+200  1  sam   200
+
+statement ok
+COMMIT
+
+query TI
+SELECT * FROM events AS OF 0
+----
+
+query TI
+SELECT * FROM events AS OF 100
+----
+joe  100
+
+query TI
+SELECT * FROM events AS OF 101
+----
+joe  100
+mike 101
+
+-- Test that the `AS OF` clause fails if the timestamp is before the creation time of the table
+statement error timestamp is before table creation time
+SELECT * FROM events AS OF TIMESTAMP '2023-08-10T10:00:00Z';
+
+-- Test that the `AS OF` clause fails if the timestamp is after the current time
+statement error timestamp is after current time
+SELECT * FROM events AS OF TIMESTAMP '2023-08-11T10:00:00Z';
+
+-- Test that the `AS OF` clause works if the timestamp is the current time for a table that was created in the past
+statement ok
+CREATE TABLE events (
+  id INT,
+  name VARCHAR(255),
+  timestamp TIMESTAMPTZ,
+)
+WITH (
+  timestamp_policy = "CREATE_TIME",
+);
+
+INSERT INTO events (id, name, timestamp) VALUES (1, 'joe', NOW());
+
+statement ok
+SELECT * FROM events AS OF NOW();
+
+-- Test that the `AS OF` clause works if the timestamp is in the middle of a batch
+statement ok
+BEGIN;
+
+INSERT INTO events (id, name, timestamp) VALUES (2, 'mike', NOW());
+
+SAVEPOINT s1;
+
+INSERT INTO events (id, name, timestamp) VALUES (3, 'sam', NOW());
+
+COMMIT;
+
+statement ok
+SELECT * FROM events AS OF TIMESTAMP '2023-08-10T11:00:00Z';
+
+-- Test that the `AS OF` clause works if the timestamp is equal to the creation time of a row
+statement ok
+CREATE TABLE events (
+  id INT,
+  name VARCHAR(255),
+  timestamp TIMESTAMPTZ,
+)
+WITH (
+  timestamp_policy = "CREATE_TIME",
+);
+
+INSERT INTO events (id, name, timestamp) VALUES (1, 'joe', TIMESTAMP '2023-08-10T10:00:00Z');
+
+statement ok
+SELECT * FROM events AS OF TIMESTAMP '2023-08-10T10:00:00Z';
+
+-- Test that the `AS OF` clause works if the timestamp is equal to the current time for a row that was inserted in the past
+statement ok
+CREATE TABLE events (
+  id INT,
+  name VARCHAR(255),
+  timestamp TIMESTAMPTZ,
+)
+WITH (
+  timestamp_policy = "CREATE_TIME",
+);
+
+INSERT INTO events (id, name, timestamp) VALUES (1, 'joe', NOW());
+
+statement ok
+SELECT * FROM events AS OF NOW();

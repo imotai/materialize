@@ -27,6 +27,7 @@ import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -764,40 +765,42 @@ class RenameSinkAction(Action):
 
 class AlterKafkaSinkFromAction(Action):
     def run(self, exe: Executor) -> bool:
+        if exe.db.scenario == Scenario.Kill:
+            # Does not work reliably with kills, see #28870
+            return False
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
             sink = self.rng.choice(exe.db.kafka_sinks)
-        with sink.lock:
+        with sink.lock, sink.base_object.lock:
             if sink not in exe.db.kafka_sinks:
                 return False
 
             old_object = sink.base_object
-            if sink.format in ["FORMAT BYTES", "FORMAT TEXT"]:
-                # single column formats
-                new_object = self.rng.choice(
-                    [
-                        o
-                        for o in exe.db.db_objects_without_views()
-                        if len(o.columns) == 1
-                    ]
-                )
-            elif sink.key != "":
+            if sink.key != "":
                 # key requires same column names, low chance of even having that
                 return False
+            elif sink.format in ["FORMAT BYTES", "FORMAT TEXT"]:
+                # single column formats
+                objs = [
+                    o
+                    for o in exe.db.db_objects_without_views()
+                    if len(o.columns) == 1
+                    and o.columns[0].data_type == old_object.columns[0].data_type
+                ]
             else:
                 # multi column formats require at least as many columns as before
                 # columns also have to be of the same type, see #28726
-                new_object = self.rng.choice(
-                    [
-                        o
-                        for o in exe.db.db_objects_without_views()
-                        if len(o.columns) >= len(old_object.columns)
-                        and [c.data_type for c in o.columns[: len(old_object.columns)]]
-                        == [c.data_type for c in old_object.columns]
-                    ]
-                )
-            sink.base_object = new_object
+                objs = [
+                    o
+                    for o in exe.db.db_objects_without_views()
+                    if len(o.columns) >= len(old_object.columns)
+                    and [c.data_type for c in o.columns[: len(old_object.columns)]]
+                    == [c.data_type for c in old_object.columns]
+                ]
+            if not objs:
+                return False
+            sink.base_object = self.rng.choice(objs)
 
             try:
                 exe.execute(
@@ -1007,6 +1010,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_batch_columnar_stats_only_override"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_part_decode_format"] = [
+            "row_with_validate",
+            "arrow",
+        ]
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
@@ -1615,6 +1622,9 @@ class ZeroDowntimeDeployAction(Action):
                 ports=ports,
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
+                system_parameter_defaults=get_default_system_parameters(
+                    zero_downtime=True
+                ),
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
             ),
@@ -2184,8 +2194,7 @@ ddl_action_list = ActionList(
         (DropClusterAction, 2),
         (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 4),
-        # TODO: Reenable when #28166 is fixed
-        # (DropClusterReplicaAction, 4),
+        (DropClusterReplicaAction, 4),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 2),

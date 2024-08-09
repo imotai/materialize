@@ -237,6 +237,15 @@ The `mz_internal_cluster_replicas` table lists the replicas that are created and
 |------------|----------|-------------------------------------------------------------------------------------------------------------|
 | id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
 
+## `mz_pending_cluster_replicas`
+
+The `mz_pending_cluster_replicas` table lists the replicas that were created during managed cluster alter statement that has not yet finished. The configurations of these replica may differ from the cluster's configuration.
+
+<!-- RELATION_SPEC mz_internal.mz_pending_cluster_replicas -->
+| Field      | Type     | Meaning                                                                                                     |
+|------------|----------|-------------------------------------------------------------------------------------------------------------|
+| id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
+
 ## `mz_comments`
 
 The `mz_comments` table stores optional comments (descriptions) for objects in the database.
@@ -315,7 +324,8 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 The `mz_history_retention_strategies` describes the history retention strategies
 for tables, sources, indexes, materialized views that are configured with a
-[history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period).
+[history retention
+period](/transform-data/patterns/durable-subscriptions/#history-retention-period).
 
 <!-- RELATION_SPEC mz_internal.mz_history_retention_strategies -->
 | Field | Type | Meaning |
